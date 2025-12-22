@@ -5,19 +5,17 @@ from functools import wraps
 
 bp = Blueprint('auth', __name__)
 
-# Secret key for JWT (should match app.py)
+# secret key for JWT encoding/decoding (should match app.py)
 SECRET_KEY = 'your-secret-key-here'
 
-# Dummy user database (replace with actual database)
+# dummy user database (!!!!replace with real database later!!!!)
 users_db = {
     'admin': 'admin123',
     'doctor': 'doctor123',
     'user': 'password123',
-    'newuser': 'newpassword',  # Add new users like this
-    'john': 'john123'          # Add as many as you need
 }
 
-# Store active tokens (in production, use Redis or database)
+# store active tokens (later should use Redis or database!!)
 active_tokens = set()
 
 def token_required(f):
@@ -29,7 +27,7 @@ def token_required(f):
         if 'Authorization' in request.headers:
             auth_header = request.headers['Authorization']
             try:
-                token = auth_header.split(' ')[1]  # Bearer <token>
+                token = auth_header.split(' ')[1]  
             except IndexError:
                 return jsonify({'error': 'Invalid token format'}), 401
         
@@ -63,15 +61,15 @@ def login():
         if not username or not password:
             return jsonify({'error': 'Missing username or password'}), 400
         
-        # Verify credentials (replace with database check)
+        # verify credentials (replace with database check)
         if username in users_db and users_db[username] == password:
-            # Generate JWT token
+            # generate JWT token
             token = jwt.encode({
                 'username': username,
                 'exp': datetime.utcnow() + timedelta(hours=24)
             }, SECRET_KEY, algorithm='HS256')
             
-            # Store token
+            # store token
             active_tokens.add(token)
             
             return jsonify({

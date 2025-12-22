@@ -1,18 +1,19 @@
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 import sys
 from pathlib import Path
 
-# Add the backend directory to Python path
 sys.path.append(str(Path(__file__).parent))
 
 from routes.auth import bp as auth_bp
+from routes.analysis import bp as analysis_bp
 
 app = Flask(__name__)
 CORS(app)
 
-# Register blueprints
+# register blueprints
 app.register_blueprint(auth_bp, url_prefix='/api/auth')
+app.register_blueprint(analysis_bp, url_prefix='/api/analysis')
 
 @app.route('/')
 def index():

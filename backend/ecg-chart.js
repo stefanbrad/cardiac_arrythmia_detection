@@ -1,160 +1,121 @@
-// ECG Chart Drawing Functions
+// Get canvas elements
+const ecgCanvas = document.getElementById('ecgCanvas');
+const ctx = ecgCanvas.getContext('2d');
 
-function drawECG() {
-    const canvas = document.getElementById('ecgCanvas');
-    if (!canvas) return;
-    
-    const ctx = canvas.getContext('2d');
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
-    
-    // Clear canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw grid
-    drawGrid(ctx, canvas.width, canvas.height);
-    
-    // Draw ECG signal
-    drawSignal(ctx, canvas.width, canvas.height);
+// Set canvas dimensions
+function resizeCanvas() {
+    const parent = ecgCanvas.parentElement;
+    ecgCanvas.width = parent.offsetWidth;
+    ecgCanvas.height = parent.offsetHeight;
 }
 
-function drawGrid(ctx, width, height) {
-    ctx.strokeStyle = 'rgba(139, 92, 246, 0.1)';
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ECG plotting Configuration
+const cfg = {
+    gridColor: '#1e293b',
+    gridThickColor: '#334155',
+    signalColor: '#22d3ee', // Cyan strălucitor pentru normal
+    anomalyColor: '#ef4444', // Roșu aprins pentru anomalii
+    lineWidth: 2.5,          // Linie mai groasă
+    anomalyLineWidth: 3.5,   // Linie și mai groasă pentru anomalii
+    baseline: ecgCanvas.height / 2,
+    amplitude: 150, // Mărim amplitudinea să fie mai vizibil
+    glowAmount: 10  // Efect de strălucire
+};
+
+// Draw grid function (Rămâne la fel, dar cu culori mai bune)
+function drawGrid() {
+    ctx.clearRect(0, 0, ecgCanvas.width, ecgCanvas.height);
+    ctx.beginPath();
+    ctx.strokeStyle = cfg.gridColor;
     ctx.lineWidth = 0.5;
-    
-    // Vertical lines
-    for (let x = 0; x < width; x += 20) {
-        ctx.beginPath();
+
+    const gridSize = 20;
+    for (let x = 0; x < ecgCanvas.width; x += gridSize) {
         ctx.moveTo(x, 0);
-        ctx.lineTo(x, height);
-        ctx.stroke();
+        ctx.lineTo(x, ecgCanvas.height);
     }
-    
-    // Horizontal lines
-    for (let y = 0; y < height; y += 20) {
-        ctx.beginPath();
+    for (let y = 0; y < ecgCanvas.height; y += gridSize) {
         ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
+        ctx.lineTo(ecgCanvas.width, y);
+    }
+    ctx.stroke();
+
+    // Thicker lines every 5 boxes
+    ctx.beginPath();
+    ctx.strokeStyle = cfg.gridThickColor;
+    ctx.lineWidth = 1;
+    for (let x = 0; x < ecgCanvas.width; x += gridSize * 5) {
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, ecgCanvas.height);
+    }
+    for (let y = 0; y < ecgCanvas.height; y += gridSize * 5) {
+        ctx.moveTo(0, y);
+        ctx.lineTo(ecgCanvas.width, y);
+    }
+    ctx.stroke();
+}
+
+// --- FUNCȚIA NOUĂ DE DESENARE ---
+function drawECGWithResults(fullData) {
+    drawGrid();
+
+    const signalData = fullData.ecg_data;
+    const anomalies = fullData.timeline || [];
+
+    if (!signalData || signalData.length === 0) return;
+
+    // Calculăm scara orizontală
+    const stepX = ecgCanvas.width / signalData.length;
+
+    // Helper pentru a obține coordonata Y
+    const getY = (val) => cfg.baseline - (val * cfg.amplitude);
+
+    // 1. Desenăm SEMNALUL NORMAL (Baza albastră)
+    ctx.beginPath();
+    ctx.strokeStyle = cfg.signalColor;
+    ctx.lineWidth = cfg.lineWidth;
+    ctx.lineJoin = 'round';
+    // Adăugăm strălucire (Glow effect)
+    ctx.shadowColor = cfg.signalColor;
+    ctx.shadowBlur = cfg.glowAmount;
+
+    ctx.moveTo(0, getY(signalData[0]));
+    for (let i = 1; i < signalData.length; i++) {
+        ctx.lineTo(i * stepX, getY(signalData[i]));
+    }
+    ctx.stroke();
+
+    // 2. Desenăm ANOMALIILE (Suprapunere Roșie)
+    if (anomalies.length > 0) {
+        ctx.beginPath();
+        ctx.strokeStyle = cfg.anomalyColor;
+        ctx.lineWidth = cfg.anomalyLineWidth;
+        // Strălucire roșie mai intensă
+        ctx.shadowColor = cfg.anomalyColor;
+        ctx.shadowBlur = cfg.glowAmount + 5;
+
+        anomalies.forEach(event => {
+            // Verificăm dacă avem indecșii trimiși de backend
+            if (event.start_index !== undefined && event.end_index !== undefined) {
+                
+                // Mutăm creionul la începutul anomaliei
+                ctx.moveTo(event.start_index * stepX, getY(signalData[event.start_index]));
+                
+                // Desenăm segmentul roșu
+                for (let i = event.start_index + 1; i <= event.end_index && i < signalData.length; i++) {
+                    ctx.lineTo(i * stepX, getY(signalData[i]));
+                }
+            }
+        });
         ctx.stroke();
     }
-}
 
-function drawSignal(ctx, width, height) {
-    ctx.strokeStyle = '#7c3aed';
-    ctx.lineWidth = 2;
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = '#7c3aed';
-    
-    ctx.beginPath();
-    
-    for (let x = 0; x < width; x++) {
-        // Generate ECG-like waveform
-        let y = height / 2;
-        
-        // Baseline variation
-        y += Math.sin(x * 0.02) * 10;
-        
-        // P wave
-        if (x % 150 === 20) {
-            y -= Math.sin((x % 150 - 20) * 0.3) * 15;
-        }
-        
-        // QRS complex (R-peak)
-        if (x % 150 === 50) {
-            y -= 80;
-        } else if (x % 150 === 48) {
-            y += 20;
-        } else if (x % 150 === 52) {
-            y += 20;
-        }
-        
-        // T wave
-        if (x % 150 > 60 && x % 150 < 90) {
-            y -= Math.sin((x % 150 - 60) * 0.2) * 25;
-        }
-        
-        if (x === 0) {
-            ctx.moveTo(x, y);
-        } else {
-            ctx.lineTo(x, y);
-        }
-    }
-    
-    ctx.stroke();
+    // Reset shadow pentru alte desene
     ctx.shadowBlur = 0;
 }
 
-function drawECGWithResults(data) {
-    const canvas = document.getElementById('ecgCanvas');
-    if (!canvas) return;
-    
-    const ctx = canvas.getContext('2d');
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
-    
-    // Clear canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    
-    // Draw grid
-    drawGrid(ctx, canvas.width, canvas.height);
-    
-    // If we have actual data, use it; otherwise use simulated data
-    if (data && data.length > 0) {
-        drawActualECGData(ctx, canvas.width, canvas.height, data);
-    } else {
-        drawSignal(ctx, canvas.width, canvas.height);
-        // Highlight abnormal regions
-        highlightAbnormalRegions(ctx, canvas.width, canvas.height);
-    }
-}
-
-function drawActualECGData(ctx, width, height, data) {
-    if (!data || data.length === 0) return;
-    
-    ctx.strokeStyle = '#7c3aed';
-    ctx.lineWidth = 2;
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = '#7c3aed';
-    
-    ctx.beginPath();
-    
-    const scaleX = width / data.length;
-    const scaleY = height / 2;
-    const offsetY = height / 2;
-    
-    data.forEach((value, index) => {
-        const x = index * scaleX;
-        const y = offsetY - (value * scaleY);
-        
-        if (index === 0) {
-            ctx.moveTo(x, y);
-        } else {
-            ctx.lineTo(x, y);
-        }
-    });
-    
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-}
-
-function highlightAbnormalRegions(ctx, width, height) {
-    // Highlight abnormal regions with red overlay
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
-    
-    // First abnormal region
-    ctx.fillRect(width * 0.3, 0, width * 0.1, height);
-    
-    // Second abnormal region
-    ctx.fillRect(width * 0.6, 0, width * 0.1, height);
-    
-    // Add pulse animation to abnormal regions
-    const animate = () => {
-        ctx.globalAlpha = 0.5 + Math.sin(Date.now() / 500) * 0.3;
-        requestAnimationFrame(animate);
-    };
-}
-
-// Resize handler
-window.addEventListener('resize', () => {
-    drawECG();
-});
+// Initial draw (placeholder)
+drawGrid();

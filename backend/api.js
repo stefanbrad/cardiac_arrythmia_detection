@@ -1,12 +1,11 @@
-// API Base URL - Change this to your backend URL
 const API_BASE_URL = 'http://localhost:5000/api';
 
-// API Helper Functions
+// API Functions
 const api = {
-    // Login endpoint
+    // login endpoint
     login: async (username, password) => {
         try {
-            console.log('Attempting login with:', username); // Add this line
+            console.log('Attempting login with:', username); 
             const response = await fetch(`${API_BASE_URL}/auth/login`, {
                 method: 'POST',
                 headers: {
@@ -15,16 +14,16 @@ const api = {
                 body: JSON.stringify({ username, password })
             });
 
-            console.log('Response status:', response.status); // Add this line
+            console.log('Response status:', response.status); 
             if (!response.ok) {
                 const errorData = await response.json();
-                console.log('Error data:', errorData); // Add this line
+                console.log('Error data:', errorData); 
                 throw new Error('Login failed');
             }
 
             const data = await response.json();
             
-            // Store token in sessionStorage
+            // store token in sessionStorage
             if (data.token) {
                 sessionStorage.setItem('authToken', data.token);
                 sessionStorage.setItem('username', username);
@@ -37,7 +36,7 @@ const api = {
         }
     },
 
-    // Logout endpoint
+    // logout endpoint
     logout: async () => {
         try {
             const token = sessionStorage.getItem('authToken');
@@ -50,7 +49,7 @@ const api = {
                 }
             });
 
-            // Clear session storage
+            // clear session storage
             sessionStorage.clear();
         } catch (error) {
             console.error('Logout error:', error);
@@ -58,27 +57,34 @@ const api = {
         }
     },
 
-    // Upload and analyze ECG file
-    analyzeECG: async (file, patientData) => {
+    // upload and analyze ECG file
+analyzeECG: async (recordId, patientData) => {
         try {
             const token = sessionStorage.getItem('authToken');
-            const formData = new FormData();
             
-            formData.append('ecg_file', file);
-            formData.append('patient_id', patientData.id || '');
-            formData.append('age', patientData.age || '');
-            formData.append('gender', patientData.gender || '');
+            // building json payload
+            const bodyPayload = {
+                record_id: recordId,
+                patient_id: patientData.id || '',
+                age: patientData.age || '',
+                gender: patientData.gender || ''
+            };
 
             const response = await fetch(`${API_BASE_URL}/analysis/analyze`, {
                 method: 'POST',
                 headers: {
+                    // !!! ACEASTA LINIE E FFF IMPORTANTA !!!
+                    'Content-Type': 'application/json', 
                     'Authorization': `Bearer ${token}`
                 },
-                body: formData
+                body: JSON.stringify(bodyPayload) 
             });
 
+            // handling errors
             if (!response.ok) {
-                throw new Error('Analysis failed');
+                const errorData = await response.json(); 
+                console.log('Server Error:', errorData);
+                throw new Error(errorData.error || 'Analysis failed');
             }
 
             return await response.json();
@@ -88,7 +94,7 @@ const api = {
         }
     },
 
-    // Get analysis results
+    // get analysis results
     getResults: async (analysisId) => {
         try {
             const token = sessionStorage.getItem('authToken');
@@ -111,7 +117,7 @@ const api = {
         }
     },
 
-    // Download report
+    // download report (mai am de lucrat aici)
     downloadReport: async (analysisId) => {
         try {
             const token = sessionStorage.getItem('authToken');
@@ -142,7 +148,7 @@ const api = {
         }
     },
 
-    // Save analysis
+    // save analysis (mai am de lucrat aici again)
     saveAnalysis: async (analysisId, patientData) => {
         try {
             const token = sessionStorage.getItem('authToken');
@@ -170,18 +176,18 @@ const api = {
         }
     },
 
-    // Check authentication
+    // check authentication
     isAuthenticated: () => {
         return sessionStorage.getItem('authToken') !== null;
     },
 
-    // Get current username
+    // get current username
     getCurrentUser: () => {
         return sessionStorage.getItem('username');
     }
 };
 
-// Export for use in other files
+// export for use in other files
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = api;
 }

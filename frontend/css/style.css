@@ -301,7 +301,22 @@ body {
     padding: 20px;
     border-radius: 12px;
     margin-bottom: 20px;
+    transition: all 0.3s ease;
 }
+
+.alert-box.safe {
+    background: rgba(16, 185, 129, 0.2) !important;
+    border-left-color: #10b981 !important;
+}
+
+.alert-box.warning {
+    background: rgba(245, 158, 11, 0.2) !important;
+    border-left-color: #f59e0b !important;
+}
+
+.text-safe { color: #6ee7b7 !important; }
+.text-warning { color: #fcd34d !important; }
+.text-danger { color: #fca5a5 !important; }
 
 .alert-header {
     display: flex;
