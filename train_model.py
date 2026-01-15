@@ -57,9 +57,6 @@ print("\noriginal data distribution:")
 for k, v in data_by_class.items():
     print(f"   class {k}: {len(v)} examples")
 
-# ECHILIBRAREA (Undersampling)
-# taiem toate clasele la un maxim fix, 5000 in cazul nostru
-# gasim minimul, dar nu mai putin de 500 (ca sa nu eliminam clasele rare de tot)
 counts = [len(v) for v in data_by_class.values()]
 target_count = 5000 
 
@@ -95,7 +92,6 @@ y = np.array(y_balanced)
 print(f"Dataset FINAL: {len(X)} batai totale")
 
 # antrenare
-print("Antrenare Random Forest...")
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
 
 model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
@@ -106,4 +102,3 @@ print("\nAcuratete pe test:")
 print(model.score(X_test, y_test))
 
 joblib.dump(model, 'ecg_model.pkl')
-print("Modelul ECHILIBRAT a fost salvat")
