@@ -1,0 +1,26 @@
+# Backend Dependencies for Cardiac Arrhythmia Detection
+
+# Web Framework
+Flask==3.0.0
+flask-cors==4.0.0
+Werkzeug==3.0.1
+
+# Scientific Computing
+numpy
+scipy
+pandas
+
+# Machine Learning
+scikit-learn
+joblib
+
+# ECG Processing
+wfdb
+
+# Progress Bar
+tqdm
+
+# Optional: Deep Learning
+# tensorflow
+# torch
+# torchvision
