@@ -12,17 +12,14 @@ import wfdb
 from ecg_processor import ECGProcessor, extract_features_from_signal
 from arrhythmia_classifier import ArrhythmiaClassifier
 
-# ==========================
-# Config
-# ==========================
+
 MODEL_PATH = os.environ.get("MODEL_PATH", "models/mitbih_arrhythmia_model.pkl")
 MAX_FILE_MB = 50
 FS_DEFAULT = 360  # MIT-BIH uses 360Hz
 MAX_BEATS_TO_ANALYZE = 500  # limit beats for performance
 
-# Event thresholds (tune as you like)
-EVENT_MIN_COUNT = 2          # at least 2 beats of that class
-EVENT_MIN_PERCENT = 0.05     # or at least 5% of beats
+EVENT_MIN_COUNT = 2          
+EVENT_MIN_PERCENT = 0.05     
 
 app = Flask(__name__)
 CORS(app)
@@ -38,9 +35,6 @@ else:
           f"Backend will still run, but predictions may be rule-based.")
 
 
-# ==========================
-# Utilities
-# ==========================
 def json_error(message: str, status: int = 400, **extra):
     return jsonify({"error": message, **extra}), status
 
@@ -159,9 +153,6 @@ def read_signal_from_mitbih_zip(zip_bytes: bytes) -> np.ndarray:
         raise ValueError("ZIP must contain matching .dat for at least one .hea file (same filename).")
 
 
-# ==========================
-# Beat detection + beat-level inference
-# ==========================
 def detect_r_peaks_simple(signal: np.ndarray, fs: int = FS_DEFAULT) -> np.ndarray:
     x = np.asarray(signal, dtype=float)
     x = x - np.mean(x)
@@ -200,7 +191,6 @@ def heart_rate_from_peaks(peaks: np.ndarray, fs: int = FS_DEFAULT) -> float:
 def classify_beats(signal_processed: np.ndarray, fs: int = FS_DEFAULT) -> dict:
     peaks = detect_r_peaks_simple(signal_processed, fs=fs)
 
-    # LIMIT beats EARLY (this is what reduces runtime)
     if len(peaks) > MAX_BEATS_TO_ANALYZE:
         idx = np.linspace(0, len(peaks) - 1, num=MAX_BEATS_TO_ANALYZE, dtype=int)
         peaks = peaks[idx]
@@ -232,7 +222,6 @@ def classify_beats(signal_processed: np.ndarray, fs: int = FS_DEFAULT) -> dict:
     normal_beats = int(code_counts.get("NSR", 0))
     abnormal_beats = int(total_beats - normal_beats)
 
-    # Build events: all non-NSR that pass threshold (count OR percent)
     events = []
     if total_beats > 0:
         for code, count in code_counts.items():
@@ -293,15 +282,15 @@ def sample_windows(
     total_requested = win_len * n_windows
     signal_len = len(signal)
 
-    # Case 1: very short signal
+    # case 1: very short signal
     if signal_len <= win_len:
         return signal
 
-    # Case 2: signal shorter than requested total duration
+    # case 2: signal shorter than requested total duration
     if signal_len <= total_requested:
         return signal
 
-    # Case 3: long signal -> sample windows
+    # case 3: long signal -> sample windows
     max_start = signal_len - win_len
     starts = np.linspace(0, max_start, num=n_windows, dtype=int)
 
@@ -333,7 +322,6 @@ def predict():
         if not file_bytes:
             return json_error("Uploaded file is empty.", 400)
 
-        # .dat/.hea alone are not enough
         if ext == "dat":
             return json_error(
                 "MIT-BIH .dat requires matching .hea. Upload a .zip containing both .dat and .hea.",
@@ -356,14 +344,12 @@ def predict():
         else:
             return json_error("Unsupported file type.", 400)
 
-        # Debug (helps when zip parsing is wrong)
         print(
             f"[UPLOAD] {f.filename} ext={ext} len={len(signal)} "
             f"min={float(np.min(signal)):.4f} max={float(np.max(signal)):.4f} "
             f"mean={float(np.mean(signal)):.4f} std={float(np.std(signal)):.4f}"
         )
 
-        # Preprocess once
         signal = sample_windows(
             signal,
             fs=FS_DEFAULT,
@@ -374,23 +360,20 @@ def predict():
 
         signal_processed = processor.preprocess_signal(signal, original_sampling_rate=FS_DEFAULT)
 
-        # Beat-level stats + events
+        # beat-level stats + events
         beat_info = classify_beats(signal_processed, fs=FS_DEFAULT)
         base_rhythm_code = dominant_code(beat_info["code_counts"])  # often NSR
         main_arrhythmia_code = beat_info["events"][0]["code"] if beat_info["events"] else "NSR"
 
-        # Segment-level probabilities (nice to show too)
+        # segment-level probabilities 
         seg_pred = segment_probabilities(signal_processed, fs=FS_DEFAULT)
 
-        # Compose response
         s = beat_info["summary"]
         response = {
-            # Base vs events:
             "base_rhythm_code": base_rhythm_code,
             "arrhythmia_detected": len(beat_info["events"]) > 0,
             "main_arrhythmia_code": main_arrhythmia_code,
 
-            # Human labels for main arrhythmia:
             "arrhythmia_code": main_arrhythmia_code,
             "arrhythmia_type": ArrhythmiaClassifier.ARRHYTHMIA_TYPES.get(
                 ArrhythmiaClassifier._get_code_index_static(main_arrhythmia_code), "Unknown"
@@ -399,12 +382,10 @@ def predict():
                 ArrhythmiaClassifier._get_code_index_static(main_arrhythmia_code), "Unknown"
             ),
 
-            # Segment probability output:
             "confidence": float(seg_pred.get("confidence", 0.5)),
             "source": seg_pred.get("source", "ml"),
             "all_probabilities": seg_pred.get("all_probabilities", {}),
 
-            # Beat-level info:
             "summary": beat_info["summary"],
             "events": beat_info["events"],
         }
