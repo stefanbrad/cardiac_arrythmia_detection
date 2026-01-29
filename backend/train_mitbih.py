@@ -29,27 +29,17 @@ class MITBIHTrainer:
         ]
 
     def _label_segment_presence(self, segment_annotations: List[int]) -> int:
-        """
-        Improved segment labeling:
-        - If VT present above tiny threshold => VT
-        - Else if PVC present => PVC
-        - Else if SVT present => SVT
-        - Else if OTHER present => OTHER
-        - Else NSR
-        """
         if not segment_annotations:
             return 0
 
         total = len(segment_annotations)
         counts = {c: segment_annotations.count(c) for c in set(segment_annotations)}
 
-        # presence thresholds (tune if needed)
         vt = counts.get(4, 0)
         pvc = counts.get(3, 0)
         svt = counts.get(5, 0)
         oth = counts.get(8, 0)
 
-        # priority by clinical severity
         if vt >= 1:
             return 4
         if pvc / total >= 0.05 or pvc >= 1:
@@ -113,8 +103,6 @@ class MITBIHTrainer:
         all_labels = []
 
         records_to_load = self.record_numbers[:max_records] if max_records else self.record_numbers
-        print(f"Loading {len(records_to_load)} MIT-BIH records...")
-        print("=" * 60)
 
         for rn in tqdm(records_to_load, desc="Loading records"):
             segs, labs = self.load_record(rn, segment_length)
@@ -122,17 +110,8 @@ class MITBIHTrainer:
                 all_segments.extend(segs)
                 all_labels.extend(labs)
 
-        print(f"\nTotal segments loaded: {len(all_segments)}")
-
-        print("\nExtracting features from segments...")
         X = self.extract_features_from_segments(all_segments)
         y = np.array(all_labels)
-
-        # class distribution
-        print("\nClass distribution:")
-        unique, counts = np.unique(y, return_counts=True)
-        for cls, cnt in zip(unique, counts):
-            print(f"  Class {cls} ({ArrhythmiaClassifier.ARRHYTHMIA_CODES[cls]}): {cnt} samples ({cnt/len(y)*100:.1f}%)")
 
         return X, y
 
@@ -158,8 +137,6 @@ class MITBIHTrainer:
 
         Xb = np.vstack(Xb)
         yb = np.array(yb)
-
-        # shuffle
         p = rng.permutation(len(yb))
         return Xb[p], yb[p]
 
@@ -171,31 +148,18 @@ class MITBIHTrainer:
         balance: bool = True,
         output_path: str = "models/mitbih_arrhythmia_model.pkl",
     ) -> ArrhythmiaClassifier:
-        print("=" * 60)
-        print("🎓 Training on MIT-BIH Arrhythmia Database (Improved)")
-        print("=" * 60)
-
         X, y = self.load_all_records(segment_length, max_records)
 
-        # Split BEFORE balancing
         from sklearn.model_selection import train_test_split
         X_train, X_val, y_train, y_val = train_test_split(
             X, y, test_size=0.2, random_state=42, stratify=y
         )
 
         if balance:
-            print("\nBalancing TRAIN set only (oversample)...")
             X_train, y_train = self.balance_train_only(X_train, y_train)
-            print(f"Balanced train size: {len(y_train)}")
 
-        print(f"\nInitializing {model_type} classifier...")
         classifier = ArrhythmiaClassifier(model_type=model_type)
 
-        print("\nTraining model...")
-        # We train on pre-split sets by calling classifier.train on merged data is not supported,
-        # so we do a small trick: train() uses its own split. We'll instead fit manually here.
-
-        # scale
         X_train_scaled = classifier.scaler.fit_transform(X_train)
         X_val_scaled = classifier.scaler.transform(X_val)
 
@@ -206,31 +170,11 @@ class MITBIHTrainer:
         val_acc = classifier.model.score(X_val_scaled, y_val)
         y_pred = classifier.model.predict(X_val_scaled)
 
-        print("\nValidation Results:")
-        print(f"Training Accuracy: {train_acc:.4f}")
-        print(f"Validation Accuracy: {val_acc:.4f}")
-
         labels = np.unique(y_val)
         from sklearn.metrics import classification_report
-        print("\nClassification Report:")
-        print(classification_report(
-            y_val, y_pred,
-            labels=labels,
-            target_names=[ArrhythmiaClassifier.ARRHYTHMIA_CODES[i] for i in labels]
-        ))
 
-        print("\nTop 10 Important Features:")
-        imp = classifier.get_feature_importance()
-        for k, v in sorted(imp.items(), key=lambda x: x[1], reverse=True)[:10]:
-            print(f"  {k}: {v:.4f}")
-
-        print(f"\nSaving model to {output_path}...")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         classifier.save_model(output_path)
-
-        print("\n✓ Training complete!")
-        print(f"Final validation accuracy: {val_acc:.4f}")
-        print(f"Model saved to: {output_path}")
         return classifier
 
 

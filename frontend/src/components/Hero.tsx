@@ -8,7 +8,7 @@ interface HeroProps {
 export function Hero({ onUploadClick }: HeroProps) {
   return (
     <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
-      {/* NEW: Radial gradient background */}
+      {/* radial gradient background */}
       <div 
         className="absolute inset-0 z-0"
         style={{

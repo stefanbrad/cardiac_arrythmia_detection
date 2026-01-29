@@ -282,15 +282,12 @@ def sample_windows(
     total_requested = win_len * n_windows
     signal_len = len(signal)
 
-    # case 1: very short signal
     if signal_len <= win_len:
         return signal
 
-    # case 2: signal shorter than requested total duration
     if signal_len <= total_requested:
         return signal
 
-    # case 3: long signal -> sample windows
     max_start = signal_len - win_len
     starts = np.linspace(0, max_start, num=n_windows, dtype=int)
 
@@ -344,12 +341,6 @@ def predict():
         else:
             return json_error("Unsupported file type.", 400)
 
-        print(
-            f"[UPLOAD] {f.filename} ext={ext} len={len(signal)} "
-            f"min={float(np.min(signal)):.4f} max={float(np.max(signal)):.4f} "
-            f"mean={float(np.mean(signal)):.4f} std={float(np.std(signal)):.4f}"
-        )
-
         signal = sample_windows(
             signal,
             fs=FS_DEFAULT,
@@ -360,12 +351,10 @@ def predict():
 
         signal_processed = processor.preprocess_signal(signal, original_sampling_rate=FS_DEFAULT)
 
-        # beat-level stats + events
         beat_info = classify_beats(signal_processed, fs=FS_DEFAULT)
-        base_rhythm_code = dominant_code(beat_info["code_counts"])  # often NSR
+        base_rhythm_code = dominant_code(beat_info["code_counts"])
         main_arrhythmia_code = beat_info["events"][0]["code"] if beat_info["events"] else "NSR"
 
-        # segment-level probabilities 
         seg_pred = segment_probabilities(signal_processed, fs=FS_DEFAULT)
 
         s = beat_info["summary"]
@@ -403,8 +392,6 @@ def predict():
     except ValueError as e:
         return json_error(str(e), 400)
     except Exception as e:
-        # always JSON
-        print("[ERROR]", repr(e))
         return json_error("Internal server error during prediction.", 500, detail=str(e))
 
 

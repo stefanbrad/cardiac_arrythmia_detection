@@ -1,10 +1,3 @@
-"""
-Advanced Arrhythmia Classifier (Hybrid)
-- ML model + rule-based fallback
-- Safe probability mapping via model.classes_
-- Prevents ML from outputting unsupported classes (e.g., BRADY/TACHY) if not trained on them
-"""
-
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
@@ -72,8 +65,6 @@ class ArrhythmiaClassifier:
         "signal_min",
     ]
 
-    # Only these classes exist in your MIT-BIH beat mapping/training
-    # (0=NSR, 3=PVC, 4=VT, 5=SVT, 8=OTHER)
     MITBIH_TRAINED_CLASSES = {0, 3, 4, 5, 8}
 
     def __init__(self, model_type: str = "random_forest"):
@@ -109,30 +100,26 @@ class ArrhythmiaClassifier:
         return 8
 
     def classify_by_features(self, features: Dict[str, float]) -> int:
-        """
-        Rule-based for rhythm-level (segment) inference.
-        Use this mainly for BRADY/TACHY/AFIB heuristics when ML is uncertain.
-        """
         hr = float(features.get("heart_rate", 75))
         sdnn = float(features.get("sdnn", 50))
         rmssd = float(features.get("rmssd", 40))
         pnn50 = float(features.get("pnn50", 10))
 
         if hr < 55:
-            return 6  # BRADY
+            return 6
 
         if hr > 110:
             if sdnn > 100 or rmssd > 80:
-                return 1 if pnn50 > 20 else 7  # AFIB or TACHY
-            return 4 if hr > 160 else 5  # VT or SVT
+                return 1 if pnn50 > 20 else 7
+            return 4 if hr > 160 else 5
 
         if sdnn > 90 or rmssd > 70:
-            return 1 if pnn50 > 15 else 3  # AFIB or PVC-like irregularity
+            return 1 if pnn50 > 15 else 3
 
         if 60 <= hr <= 100 and sdnn < 50:
-            return 0  # NSR
+            return 0
 
-        return 8  # OTHER
+        return 8
 
     def train(self, X: np.ndarray, y: np.ndarray, validation_split: float = 0.2) -> Dict:
         X_train, X_val, y_train, y_val = train_test_split(
@@ -141,8 +128,6 @@ class ArrhythmiaClassifier:
 
         X_train = self.scaler.fit_transform(X_train)
         X_val = self.scaler.transform(X_val)
-
-        print(f"Training {self.model_type} classifier...")
         self.model.fit(X_train, y_train)
         self.is_trained = True
 
@@ -152,19 +137,6 @@ class ArrhythmiaClassifier:
         y_pred = self.model.predict(X_val)
         labels = np.unique(y_val)
 
-        print("\nValidation Results:")
-        print(f"Training Accuracy: {train_acc:.4f}")
-        print(f"Validation Accuracy: {val_acc:.4f}")
-        print("\nClassification Report:")
-        print(
-            classification_report(
-                y_val,
-                y_pred,
-                labels=labels,
-                target_names=[self.ARRHYTHMIA_CODES[i] for i in labels],
-            )
-        )
-
         return {
             "train_accuracy": float(train_acc),
             "val_accuracy": float(val_acc),
@@ -172,10 +144,6 @@ class ArrhythmiaClassifier:
         }
 
     def predict_single(self, features: np.ndarray) -> Dict:
-        """
-        For MIT-BIH model: returns only NSR/PVC/VT/SVT/OTHER from ML.
-        Rule-based fallback can still output BRADY/TACHY/AFIB when ML is uncertain.
-        """
         if features.ndim == 1:
             features = features.reshape(1, -1)
 
@@ -187,23 +155,19 @@ class ArrhythmiaClassifier:
 
         features_scaled = self.scaler.transform(features)
 
-        # ML probabilities
         probs = self.model.predict_proba(features_scaled)[0]
-        classes = list(self.model.classes_)  # e.g. [0,3,4,5,8]
+        classes = list(self.model.classes_)
 
         prob_dict = {self.ARRHYTHMIA_CODES[c]: float(p) for c, p in zip(classes, probs)}
 
-        # Pick best ML class among trained set
         best_idx = int(np.argmax(probs))
         ml_pred_class = int(classes[best_idx])
         ml_conf = float(probs[best_idx])
 
-        # Hybrid fallback if ML uncertain
         if ml_conf < 0.55:
             rule_pred = self.classify_by_features(feature_dict)
             return self._format_result(rule_pred, ml_conf, prob_dict, source="hybrid_rule_fallback")
 
-        # Prevent ML from ever outputting unsupported rhythm-only labels (BRADY/TACHY/etc)
         if ml_pred_class not in self.MITBIH_TRAINED_CLASSES:
             ml_pred_class = 8
 
@@ -232,7 +196,6 @@ class ArrhythmiaClassifier:
             {"model": self.model, "scaler": self.scaler, "model_type": self.model_type},
             path,
         )
-        print(f"Model saved to {path}")
 
     def load_model(self, path: str):
         data = joblib.load(path)
@@ -240,7 +203,6 @@ class ArrhythmiaClassifier:
         self.scaler = data["scaler"]
         self.model_type = data["model_type"]
         self.is_trained = True
-        print(f"Model loaded from {path}")
 
     def get_feature_importance(self) -> Dict[str, float]:
         if not self.is_trained or not hasattr(self.model, "feature_importances_"):

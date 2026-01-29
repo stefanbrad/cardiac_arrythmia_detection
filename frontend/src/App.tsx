@@ -30,7 +30,6 @@ function App() {
 
   return (
     <div className="min-h-screen relative">
-      {/* Radial gradient background */}
       <div 
         className="fixed inset-0 z-0"
         style={{
@@ -38,7 +37,6 @@ function App() {
         }}
       />
       
-      {/* Content wrapper with higher z-index */}
       <div className="relative z-10">
         <nav className="fixed top-0 left-0 right-0 z-50 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b">
         <div className="container mx-auto px-4 py-4">

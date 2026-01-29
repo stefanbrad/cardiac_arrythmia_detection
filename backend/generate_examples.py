@@ -1,135 +1,82 @@
-"""
-Generate Example ECG Files for Testing
-
-This script creates synthetic ECG files in various formats for testing the API
-"""
-
 import numpy as np
 import pandas as pd
 import json
 import os
 
 def generate_ecg_signal(duration=10, sampling_rate=360, arrhythmia_type='normal'):
-    """
-    Generate synthetic ECG signal
-    
-    Args:
-        duration: Signal duration in seconds
-        sampling_rate: Sampling rate in Hz
-        arrhythmia_type: Type of arrhythmia to simulate
-        
-    Returns:
-        time array, ECG signal array
-    """
     t = np.linspace(0, duration, int(duration * sampling_rate))
     
     if arrhythmia_type == 'normal':
-        # Normal sinus rhythm (~75 bpm)
-        heart_rate = 75 / 60  # Hz
+        heart_rate = 75 / 60
         ecg = np.zeros_like(t)
-        
-        # Add P wave, QRS complex, and T wave for each beat
         beat_interval = 1.0 / heart_rate
         num_beats = int(duration * heart_rate)
         
         for i in range(num_beats):
             beat_time = i * beat_interval
-            
-            # P wave (small)
             p_wave = 0.25 * np.exp(-((t - (beat_time + 0.12)) ** 2) / 0.0005)
-            
-            # QRS complex (sharp, tall)
             qrs = 1.5 * np.exp(-((t - (beat_time + 0.18)) ** 2) / 0.0001)
-            
-            # T wave (broader)
             t_wave = 0.35 * np.exp(-((t - (beat_time + 0.36)) ** 2) / 0.001)
-            
             ecg += p_wave + qrs + t_wave
         
-        # Add small noise
         ecg += 0.05 * np.random.randn(len(t))
     
     elif arrhythmia_type == 'afib':
-        # Atrial fibrillation (irregular rhythm, ~110 bpm average)
-        # Irregular RR intervals
         current_time = 0
         ecg = np.zeros_like(t)
         
         while current_time < duration:
-            # Random RR interval (300-900 ms)
             rr_interval = np.random.uniform(0.3, 0.9)
-            
-            # QRS complex (no clear P wave)
             qrs = 1.2 * np.exp(-((t - current_time) ** 2) / 0.0001)
-            
-            # Irregular T wave
             t_wave = 0.25 * np.exp(-((t - (current_time + 0.25)) ** 2) / 0.001)
-            
             ecg += qrs + t_wave
             current_time += rr_interval
         
-        # Add more noise (fibrillatory waves)
         ecg += 0.15 * np.random.randn(len(t))
     
     elif arrhythmia_type == 'brady':
-        # Bradycardia (~50 bpm)
-        heart_rate = 50 / 60  # Hz
+        heart_rate = 50 / 60
         ecg = np.zeros_like(t)
-        
         beat_interval = 1.0 / heart_rate
         num_beats = int(duration * heart_rate)
         
         for i in range(num_beats):
             beat_time = i * beat_interval
-            
-            # Normal morphology but slow rate
             p_wave = 0.3 * np.exp(-((t - (beat_time + 0.15)) ** 2) / 0.0005)
             qrs = 1.6 * np.exp(-((t - (beat_time + 0.22)) ** 2) / 0.0001)
             t_wave = 0.4 * np.exp(-((t - (beat_time + 0.45)) ** 2) / 0.001)
-            
             ecg += p_wave + qrs + t_wave
         
         ecg += 0.04 * np.random.randn(len(t))
     
     elif arrhythmia_type == 'tachy':
-        # Tachycardia (~120 bpm)
-        heart_rate = 120 / 60  # Hz
+        heart_rate = 120 / 60
         ecg = np.zeros_like(t)
-        
         beat_interval = 1.0 / heart_rate
         num_beats = int(duration * heart_rate)
         
         for i in range(num_beats):
             beat_time = i * beat_interval
-            
-            # Normal morphology but fast rate
             p_wave = 0.2 * np.exp(-((t - (beat_time + 0.08)) ** 2) / 0.0004)
             qrs = 1.4 * np.exp(-((t - (beat_time + 0.13)) ** 2) / 0.0001)
             t_wave = 0.3 * np.exp(-((t - (beat_time + 0.28)) ** 2) / 0.0008)
-            
             ecg += p_wave + qrs + t_wave
         
         ecg += 0.05 * np.random.randn(len(t))
     
     elif arrhythmia_type == 'pvc':
-        # PVC (premature ventricular contractions)
-        heart_rate = 75 / 60  # Hz
+        heart_rate = 75 / 60
         ecg = np.zeros_like(t)
-        
         beat_interval = 1.0 / heart_rate
         num_beats = int(duration * heart_rate)
         
         for i in range(num_beats):
             beat_time = i * beat_interval
-            
-            # Every 4th beat is a PVC
             if i % 4 == 3:
-                # Wide QRS, no P wave, inverted T wave
-                qrs = 2.0 * np.exp(-((t - beat_time) ** 2) / 0.0003)  # Wider
-                t_wave = -0.5 * np.exp(-((t - (beat_time + 0.35)) ** 2) / 0.0015)  # Inverted
+                qrs = 2.0 * np.exp(-((t - beat_time) ** 2) / 0.0003)
+                t_wave = -0.5 * np.exp(-((t - (beat_time + 0.35)) ** 2) / 0.0015)
                 ecg += qrs + t_wave
             else:
-                # Normal beat
                 p_wave = 0.25 * np.exp(-((t - (beat_time + 0.12)) ** 2) / 0.0005)
                 qrs = 1.5 * np.exp(-((t - (beat_time + 0.18)) ** 2) / 0.0001)
                 t_wave = 0.35 * np.exp(-((t - (beat_time + 0.36)) ** 2) / 0.001)
@@ -138,16 +85,12 @@ def generate_ecg_signal(duration=10, sampling_rate=360, arrhythmia_type='normal'
         ecg += 0.05 * np.random.randn(len(t))
     
     else:
-        # Default to normal
         return generate_ecg_signal(duration, sampling_rate, 'normal')
     
     return t, ecg
 
 
 def save_examples():
-    """Generate and save example ECG files"""
-    
-    # Create examples directory
     os.makedirs('examples', exist_ok=True)
     
     arrhythmia_types = {
