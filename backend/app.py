@@ -13,89 +13,77 @@ from ecg_processor import ECGProcessor, extract_features_from_signal
 from arrhythmia_classifier import ArrhythmiaClassifier
 
 
-MODEL_PATH = os.environ.get("MODEL_PATH", "models/mitbih_arrhythmia_model.pkl")
+MODEL_PATH  = os.environ.get("MODEL_PATH", "models/mitbih_arrhythmia_model.pkl")
 MAX_FILE_MB = 50
-FS_DEFAULT = 360  # MIT-BIH uses 360Hz
-MAX_BEATS_TO_ANALYZE = 500  # limit beats for performance
-
-EVENT_MIN_COUNT = 2          
-EVENT_MIN_PERCENT = 0.05     
+FS_DEFAULT  = 360  # MIT-BIH standard
 
 app = Flask(__name__)
 CORS(app)
 app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_MB * 1024 * 1024
 
-processor = ECGProcessor(sampling_rate=FS_DEFAULT)
-
+processor  = ECGProcessor(sampling_rate=FS_DEFAULT)
 classifier = ArrhythmiaClassifier(model_type="random_forest")
+
 if os.path.exists(MODEL_PATH):
     classifier.load_model(MODEL_PATH)
 else:
-    print(f"[WARN] Model not found at {MODEL_PATH}. "
-          f"Backend will still run, but predictions may be rule-based.")
+    print(f"[WARN] Model not found at {MODEL_PATH}. Using rule-based classification.")
 
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def json_error(message: str, status: int = 400, **extra):
     return jsonify({"error": message, **extra}), status
 
-
 def get_ext(filename: str) -> str:
     return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-
 
 def allowed_ext(filename: str) -> bool:
     return get_ext(filename) in {"csv", "txt", "json", "zip", "dat", "hea"}
 
 
+# ── File readers ──────────────────────────────────────────────────────────────
+
 def read_signal_from_csv(file_bytes: bytes) -> np.ndarray:
     text = file_bytes.decode("utf-8", errors="ignore").strip()
     if not text:
-        raise ValueError("Empty CSV")
-
+        raise ValueError("Empty CSV file.")
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    rows = []
+    rows  = []
     for ln in lines:
-        ln = ln.replace(";", ",")
-        parts = [p.strip() for p in ln.split(",") if p.strip() != ""]
+        ln    = ln.replace(";", ",")
+        parts = [p.strip() for p in ln.split(",") if p.strip()]
         if not parts:
             continue
         if any(ch.isalpha() for ch in parts[0]):
             continue
         rows.append(parts)
-
     if not rows:
-        raise ValueError("CSV has no numeric rows")
-
+        raise ValueError("CSV has no numeric rows.")
     amps = []
     for r in rows:
         try:
             amps.append(float(r[-1]))
-        except:
+        except Exception:
             continue
-
     if len(amps) < 200:
         raise ValueError("CSV does not contain enough samples (need >= 200).")
-
     return np.array(amps, dtype=float)
 
 
 def read_signal_from_txt(file_bytes: bytes) -> np.ndarray:
     text = file_bytes.decode("utf-8", errors="ignore").strip()
     if not text:
-        raise ValueError("Empty TXT")
-
+        raise ValueError("Empty TXT file.")
     text = text.replace(",", ".")
-    parts = text.split()
     vals = []
-    for p in parts:
+    for p in text.split():
         try:
             vals.append(float(p))
-        except:
+        except Exception:
             pass
-
     if len(vals) < 200:
         raise ValueError("TXT does not contain enough samples (need >= 200).")
-
     return np.array(vals, dtype=float)
 
 
@@ -104,160 +92,157 @@ def read_signal_from_json(file_bytes: bytes) -> np.ndarray:
     if isinstance(obj, list):
         arr = obj
     elif isinstance(obj, dict):
-        arr = obj.get("signal") or obj.get("ecg") or obj.get("data")
+        arr = (obj.get("signal") or obj.get("ecg")
+               or obj.get("data") or obj.get("samples"))
     else:
         arr = None
-
     if not isinstance(arr, list) or len(arr) < 200:
-        raise ValueError("JSON must contain a list of samples (signal/ecg/data) with >= 200 points.")
-
+        raise ValueError(
+            "JSON must contain a list of >= 200 samples under key "
+            "'signal', 'ecg', 'data', or 'samples'."
+        )
     vals = []
     for x in arr:
         try:
             vals.append(float(x))
-        except:
+        except Exception:
             pass
-
     if len(vals) < 200:
         raise ValueError("JSON does not contain enough numeric samples.")
-
     return np.array(vals, dtype=float)
 
 
 def read_signal_from_mitbih_zip(zip_bytes: bytes) -> np.ndarray:
-    """
-    Robust ZIP reader for MIT-BIH:
-    - supports subfolders in zip
-    - finds a .hea that has matching .dat with same stem name
-    """
     with tempfile.TemporaryDirectory() as tmpdir:
         zpath = os.path.join(tmpdir, "upload.zip")
         with open(zpath, "wb") as f:
             f.write(zip_bytes)
-
         with zipfile.ZipFile(zpath, "r") as z:
             z.extractall(tmpdir)
-
         hea_files = list(Path(tmpdir).rglob("*.hea"))
         if not hea_files:
             raise ValueError("ZIP must contain a .hea file (MIT-BIH header).")
-
         for hea_path in hea_files:
-            record_stem = hea_path.with_suffix("")  # path without extension
-            dat_path = record_stem.with_suffix(".dat")
+            stem     = hea_path.with_suffix("")
+            dat_path = stem.with_suffix(".dat")
             if dat_path.exists():
-                record = wfdb.rdrecord(str(record_stem))
-                signal = record.p_signal[:, 0].astype(float)  # channel 0
-                return signal
-
-        raise ValueError("ZIP must contain matching .dat for at least one .hea file (same filename).")
+                record = wfdb.rdrecord(str(stem))
+                return record.p_signal[:, 0].astype(float)
+        raise ValueError("ZIP must contain matching .dat for at least one .hea file.")
 
 
-def detect_r_peaks_simple(signal: np.ndarray, fs: int = FS_DEFAULT) -> np.ndarray:
-    x = np.asarray(signal, dtype=float)
-    x = x - np.mean(x)
-    std = np.std(x) + 1e-9
-    x = x / std
+# ── R-peak detection ──────────────────────────────────────────────────────────
 
-    win = int(0.12 * fs)
-    win = max(win, 5)
-    energy = np.convolve(x * x, np.ones(win) / win, mode="same")
-
-    thr = np.percentile(energy, 95)
-    candidates = np.where(energy > thr)[0]
-    if candidates.size == 0:
-        return np.array([], dtype=int)
-
-    refractory = int(0.25 * fs)
-    peaks = []
-    last = -10**9
-    for idx in candidates:
-        if idx - last >= refractory:
-            peaks.append(idx)
-            last = idx
-    return np.array(peaks, dtype=int)
+def detect_r_peaks(sig: np.ndarray, fs: int = FS_DEFAULT) -> np.ndarray:
+    from scipy.signal import find_peaks
+    x = np.asarray(sig, dtype=float)
+    x = (x - np.mean(x)) / (np.std(x) + 1e-9)
+    dx     = np.diff(x, prepend=x[0])
+    win    = max(int(0.08 * fs), 3)
+    energy = np.convolve(dx ** 2, np.ones(win) / win, mode="same")
+    thr    = np.percentile(energy, 75)
+    peaks, _ = find_peaks(energy, height=thr, distance=int(0.25 * fs))
+    # refine to true signal peak within +-40 ms
+    half = int(0.04 * fs)
+    refined = []
+    for p in peaks:
+        lo = max(0, p - half)
+        hi = min(len(sig), p + half + 1)
+        refined.append(int(lo + np.argmax(np.abs(sig[lo:hi]))))
+    return np.array(refined, dtype=int)
 
 
 def heart_rate_from_peaks(peaks: np.ndarray, fs: int = FS_DEFAULT) -> float:
     if len(peaks) < 2:
         return 0.0
     rr = np.diff(peaks) / fs
-    rr = rr[rr > 0]
-    if len(rr) == 0:
-        return 0.0
-    return float(60.0 / np.mean(rr))
+    rr = rr[(rr > 0.25) & (rr < 2.5)]
+    return float(60.0 / np.mean(rr)) if len(rr) > 0 else 0.0
 
 
-def classify_beats(signal_processed: np.ndarray, fs: int = FS_DEFAULT) -> dict:
-    peaks = detect_r_peaks_simple(signal_processed, fs=fs)
+# ── Sliding-window classification ─────────────────────────────────────────────
+#
+# ROOT CAUSE OF THE ORIGINAL BUG:
+#   The old code called extract_features_from_signal() on individual beats
+#   (~0.5 s each).  A single beat contains at most 1 R-peak, so sdnn / rmssd /
+#   pnn50 were always 0.  With zeroed HRV, every beat looked "normal" to both
+#   the ML model and the rule-based classifier.
+#
+# FIX:
+#   Slide a 10-second window (step 5 s) over the signal.  Each window contains
+#   ~5-20 beats, so meaningful HRV values can be computed and arrhythmias
+#   produce distinct feature signatures.
 
-    if len(peaks) > MAX_BEATS_TO_ANALYZE:
-        idx = np.linspace(0, len(peaks) - 1, num=MAX_BEATS_TO_ANALYZE, dtype=int)
-        peaks = peaks[idx]
+def classify_windows(signal_processed: np.ndarray, fs: int = FS_DEFAULT) -> dict:
+    win_len = int(10 * fs)   # 10 s = 3600 samples at 360 Hz
+    step    = int(5  * fs)   # 50 % overlap
+    n       = len(signal_processed)
 
-    hr = heart_rate_from_peaks(peaks, fs=fs)
-
-    pre = int(0.30 * fs)
-    post = int(0.50 * fs)
+    if n < win_len:
+        windows = [signal_processed]
+    else:
+        starts  = range(0, n - win_len + 1, step)
+        windows = [signal_processed[s: s + win_len] for s in starts]
 
     code_counts: dict[str, int] = {}
-
-    for p in peaks:
-        a = max(0, p - pre)
-        b = min(len(signal_processed), p + post)
-        beat = signal_processed[a:b]
-
-        if len(beat) < int(0.5 * fs):
-            continue
-
-        feats = extract_features_from_signal(beat, sampling_rate=fs)
-        feats = np.array(feats, dtype=float)
-
-        pred = classifier.predict_single(feats)
-        code = pred.get("arrhythmia_code", "OTHER")
-
+    for win in windows:
+        feats = extract_features_from_signal(win, sampling_rate=fs)
+        pred  = classifier.predict_single(np.array(feats, dtype=float))
+        code  = pred.get("arrhythmia_code", "OTHER")
         code_counts[code] = code_counts.get(code, 0) + 1
 
-    total_beats = int(sum(code_counts.values()))
-    normal_beats = int(code_counts.get("NSR", 0))
-    abnormal_beats = int(total_beats - normal_beats)
+    total_w   = max(sum(code_counts.values()), 1)
+    normal_w  = code_counts.get("NSR", 0)
+    abnorm_w  = total_w - normal_w
 
     events = []
-    if total_beats > 0:
-        for code, count in code_counts.items():
-            if code == "NSR":
-                continue
-            pct = count / total_beats
-            if count >= EVENT_MIN_COUNT or pct >= EVENT_MIN_PERCENT:
-                events.append({
-                    "code": code,
-                    "label": code,
-                    "count": int(count),
-                    "percent": float(pct),
-                })
-        events.sort(key=lambda e: e["count"], reverse=True)
+    for code, count in code_counts.items():
+        if code == "NSR":
+            continue
+        events.append({
+            "code":    code,
+            "label":   code,
+            "count":   int(count),
+            "percent": round(count / total_w, 4),
+        })
+    events.sort(key=lambda e: e["count"], reverse=True)
+
+    # Heart rate + beat counts from the full signal
+    peaks         = detect_r_peaks(signal_processed, fs=fs)
+    hr            = heart_rate_from_peaks(peaks, fs=fs)
+    total_beats   = len(peaks)
+    abnorm_frac   = abnorm_w / total_w
+    abnorm_beats  = int(round(total_beats * abnorm_frac))
 
     summary = {
-        "heart_rate_bpm": int(round(hr)) if hr > 0 else 0,
-        "total_beats": total_beats,
-        "abnormal_beats": abnormal_beats,
-        "normal_beats": normal_beats,
-        "abnormal_percent": float(abnormal_beats / total_beats) if total_beats else 0.0,
-        "normal_percent": float(normal_beats / total_beats) if total_beats else 0.0,
+        "heart_rate_bpm":   int(round(hr)) if hr > 0 else 0,
+        "total_beats":      total_beats,
+        "normal_beats":     total_beats - abnorm_beats,
+        "abnormal_beats":   abnorm_beats,
+        "normal_percent":   round(1 - abnorm_frac, 4),
+        "abnormal_percent": round(abnorm_frac, 4),
     }
 
     return {
-        "peaks": peaks,
-        "summary": summary,
-        "events": events,
+        "events":      events,
+        "summary":     summary,
         "code_counts": code_counts,
+        "peaks":       peaks,
     }
 
 
-def segment_probabilities(signal_processed: np.ndarray, fs: int = FS_DEFAULT) -> dict:
-    feats = extract_features_from_signal(signal_processed, sampling_rate=fs)
-    feats = np.array(feats, dtype=float)
-    return classifier.predict_single(feats)
+# ── Final decision ────────────────────────────────────────────────────────────
+
+def final_decision(window_info: dict, seg_pred: dict) -> tuple[str, bool]:
+    # 1. Trust window-level events first
+    if window_info["events"]:
+        return window_info["events"][0]["code"], True
+    # 2. Fall back to whole-segment prediction if confident enough
+    seg_code = seg_pred.get("arrhythmia_code", "NSR")
+    seg_conf = float(seg_pred.get("confidence", 0.0))
+    if seg_code != "NSR" and seg_conf >= 0.40:
+        return seg_code, True
+    return "NSR", False
 
 
 def dominant_code(code_counts: dict) -> str:
@@ -265,40 +250,15 @@ def dominant_code(code_counts: dict) -> str:
         return "OTHER"
     return max(code_counts.items(), key=lambda x: x[1])[0]
 
-def sample_windows(
-    signal: np.ndarray,
-    fs: int,
-    window_seconds: int = 10,
-    n_windows: int = 6,
-) -> np.ndarray:
-    """
-    Adaptive window sampling:
-    - if signal is shorter than one window -> return full signal
-    - if signal is shorter than total requested duration -> return full signal
-    - otherwise sample n_windows windows uniformly across signal
-    """
 
-    win_len = int(window_seconds * fs)
-    total_requested = win_len * n_windows
-    signal_len = len(signal)
-
-    if signal_len <= win_len:
-        return signal
-
-    if signal_len <= total_requested:
-        return signal
-
-    max_start = signal_len - win_len
-    starts = np.linspace(0, max_start, num=n_windows, dtype=int)
-
-    chunks = [signal[s:s + win_len] for s in starts]
-    return np.concatenate(chunks)
-
-
+# ── Flask routes ──────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
-    return jsonify({"status": "ok", "model_loaded": bool(classifier.is_trained)})
+    return jsonify({
+        "status":       "ok",
+        "model_loaded": bool(classifier.is_trained),
+    })
 
 
 @app.post("/api/predict")
@@ -314,76 +274,77 @@ def predict():
         if not allowed_ext(f.filename):
             return json_error("Unsupported file type.", 400, filename=f.filename)
 
-        ext = get_ext(f.filename)
+        ext        = get_ext(f.filename)
         file_bytes = f.read()
+
         if not file_bytes:
             return json_error("Uploaded file is empty.", 400)
 
         if ext == "dat":
             return json_error(
-                "MIT-BIH .dat requires matching .hea. Upload a .zip containing both .dat and .hea.",
-                400,
-            )
+                "MIT-BIH .dat requires a matching .hea. "
+                "Upload a .zip containing both files.", 400)
         if ext == "hea":
             return json_error(
-                ".hea alone is not enough. Upload a .zip containing both .hea and .dat.",
-                400,
-            )
+                ".hea alone is not enough. "
+                "Upload a .zip containing both .hea and .dat.", 400)
 
+        # Parse
         if ext == "csv":
-            signal = read_signal_from_csv(file_bytes)
+            raw_signal = read_signal_from_csv(file_bytes)
         elif ext == "txt":
-            signal = read_signal_from_txt(file_bytes)
+            raw_signal = read_signal_from_txt(file_bytes)
         elif ext == "json":
-            signal = read_signal_from_json(file_bytes)
+            raw_signal = read_signal_from_json(file_bytes)
         elif ext == "zip":
-            signal = read_signal_from_mitbih_zip(file_bytes)
+            raw_signal = read_signal_from_mitbih_zip(file_bytes)
         else:
             return json_error("Unsupported file type.", 400)
 
-        signal = sample_windows(
-            signal,
-            fs=FS_DEFAULT,
-            window_seconds=10,
-            n_windows=6
+        # Pre-process
+        signal_processed = processor.preprocess_signal(
+            raw_signal, original_sampling_rate=FS_DEFAULT
         )
 
+        # Window-based classification (primary)
+        window_info = classify_windows(signal_processed, fs=FS_DEFAULT)
 
-        signal_processed = processor.preprocess_signal(signal, original_sampling_rate=FS_DEFAULT)
+        # Whole-segment classification (secondary / tiebreaker)
+        seg_pred = classifier.predict_single(
+            np.array(
+                extract_features_from_signal(signal_processed, sampling_rate=FS_DEFAULT),
+                dtype=float
+            )
+        )
 
-        beat_info = classify_beats(signal_processed, fs=FS_DEFAULT)
-        base_rhythm_code = dominant_code(beat_info["code_counts"])
-        main_arrhythmia_code = beat_info["events"][0]["code"] if beat_info["events"] else "NSR"
+        # Combine
+        final_code, arrhythmia_detected = final_decision(window_info, seg_pred)
+        final_idx  = ArrhythmiaClassifier._get_code_index_static(final_code)
+        final_type = ArrhythmiaClassifier.ARRHYTHMIA_TYPES.get(final_idx, "Unknown")
+        final_risk = ArrhythmiaClassifier.ARRHYTHMIA_RISK.get(final_idx, "Unknown")
+        confidence = float(seg_pred.get("confidence", 0.5))
 
-        seg_pred = segment_probabilities(signal_processed, fs=FS_DEFAULT)
-
-        s = beat_info["summary"]
+        s = window_info["summary"]
         response = {
-            "base_rhythm_code": base_rhythm_code,
-            "arrhythmia_detected": len(beat_info["events"]) > 0,
-            "main_arrhythmia_code": main_arrhythmia_code,
-
-            "arrhythmia_code": main_arrhythmia_code,
-            "arrhythmia_type": ArrhythmiaClassifier.ARRHYTHMIA_TYPES.get(
-                ArrhythmiaClassifier._get_code_index_static(main_arrhythmia_code), "Unknown"
+            "arrhythmia_detected":  arrhythmia_detected,
+            "arrhythmia_code":      final_code,
+            "arrhythmia_type":      final_type,
+            "risk_level":           final_risk,
+            "confidence":           confidence,
+            "source":               seg_pred.get("source", "rule_based"),
+            "base_rhythm_code":     dominant_code(window_info["code_counts"]),
+            "main_arrhythmia_code": final_code,
+            "all_probabilities":    seg_pred.get("all_probabilities", {}),
+            "summary":              s,
+            "events":               window_info["events"],
+            "message": (
+                f"Analysis identified {s['abnormal_beats']} abnormal beat(s) "
+                f"out of {s['total_beats']} total."
+                if s["total_beats"] > 0
+                else "Not enough beats detected. "
+                     "Check that the file contains a valid ECG signal."
             ),
-            "risk_level": ArrhythmiaClassifier.ARRHYTHMIA_RISK.get(
-                ArrhythmiaClassifier._get_code_index_static(main_arrhythmia_code), "Unknown"
-            ),
-
-            "confidence": float(seg_pred.get("confidence", 0.5)),
-            "source": seg_pred.get("source", "ml"),
-            "all_probabilities": seg_pred.get("all_probabilities", {}),
-
-            "summary": beat_info["summary"],
-            "events": beat_info["events"],
         }
-
-        response["message"] = (
-            f"Analysis identified {s['abnormal_beats']} abnormal beats out of {s['total_beats']} total."
-            if s["total_beats"] > 0
-            else "Not enough beats detected to provide beat statistics."
-        )
 
         return jsonify(response)
 
@@ -392,7 +353,9 @@ def predict():
     except ValueError as e:
         return json_error(str(e), 400)
     except Exception as e:
-        return json_error("Internal server error during prediction.", 500, detail=str(e))
+        return json_error(
+            "Internal server error during prediction.", 500, detail=str(e)
+        )
 
 
 if __name__ == "__main__":

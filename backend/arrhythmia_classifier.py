@@ -65,11 +65,9 @@ class ArrhythmiaClassifier:
         "signal_min",
     ]
 
-    MITBIH_TRAINED_CLASSES = {0, 3, 4, 5, 8}
-
     def __init__(self, model_type: str = "random_forest"):
         self.model_type = model_type
-        self.scaler = StandardScaler()
+        self.scaler     = StandardScaler()
         self.is_trained = False
 
         if model_type == "random_forest":
@@ -100,46 +98,76 @@ class ArrhythmiaClassifier:
         return 8
 
     def classify_by_features(self, features: Dict[str, float]) -> int:
-        hr = float(features.get("heart_rate", 75))
-        sdnn = float(features.get("sdnn", 50))
-        rmssd = float(features.get("rmssd", 40))
-        pnn50 = float(features.get("pnn50", 10))
+        """
+        Rule-based classifier for all 9 arrhythmia types.
 
+        This runs on a 10-second window so HRV features are meaningful:
+          - sdnn  (ms): std of RR intervals  - high = irregular rhythm
+          - rmssd (ms): short-term HRV       - high = beat-to-beat variability
+          - pnn50 (%):  % of consecutive RR pairs differing > 50 ms
+          - hr    (bpm): beats per minute
+
+        NOTE: features come from a window of ~10 s containing multiple beats.
+        When called on a single beat these metrics are 0 and this function
+        should not be relied upon — that was the original bug.
+        """
+        hr     = float(features.get("heart_rate", 75))
+        sdnn   = float(features.get("sdnn",   50))
+        rmssd  = float(features.get("rmssd",  40))
+        pnn50  = float(features.get("pnn50",  10))
+
+        # ── Ventricular Tachycardia: very fast + very regular (low HRV) ──────
+        if hr > 150 and sdnn < 25:
+            return 4  # VT
+
+        # ── Bradycardia: slow heart rate ──────────────────────────────────────
         if hr < 55:
-            return 6
+            return 6  # BRADY
 
-        if hr > 110:
-            if sdnn > 100 or rmssd > 80:
-                return 1 if pnn50 > 20 else 7
-            return 4 if hr > 160 else 5
+        # ── Atrial Fibrillation: chaotic rhythm → high HRV at any rate ───────
+        # AFIB has the highest HRV of all arrhythmias
+        if sdnn > 80 and rmssd > 55 and pnn50 > 12:
+            return 1  # AFIB
 
-        if sdnn > 90 or rmssd > 70:
-            return 1 if pnn50 > 15 else 3
+        # ── Atrial Flutter: fast + moderately regular ─────────────────────────
+        if 100 < hr <= 175 and 20 < sdnn <= 70:
+            return 2  # AFL
 
-        if 60 <= hr <= 100 and sdnn < 50:
-            return 0
+        # ── Supraventricular Tachycardia: fast + regular ──────────────────────
+        if hr > 130 and sdnn < 40:
+            return 5  # SVT
 
-        return 8
+        # ── General Tachycardia ───────────────────────────────────────────────
+        if hr > 100:
+            return 7  # TACHY
+
+        # ── PVC: normal rate but mildly elevated HRV ─────────────────────────
+        if 55 <= hr <= 105 and (35 < sdnn <= 80 or 25 < rmssd <= 55):
+            return 3  # PVC
+
+        # ── Normal Sinus Rhythm ───────────────────────────────────────────────
+        if 55 <= hr <= 100 and sdnn <= 50 and rmssd <= 40:
+            return 0  # NSR
+
+        return 8  # OTHER
 
     def train(self, X: np.ndarray, y: np.ndarray, validation_split: float = 0.2) -> Dict:
         X_train, X_val, y_train, y_val = train_test_split(
             X, y, test_size=validation_split, random_state=42, stratify=y
         )
-
         X_train = self.scaler.fit_transform(X_train)
-        X_val = self.scaler.transform(X_val)
+        X_val   = self.scaler.transform(X_val)
         self.model.fit(X_train, y_train)
         self.is_trained = True
 
         train_acc = self.model.score(X_train, y_train)
-        val_acc = self.model.score(X_val, y_val)
-
-        y_pred = self.model.predict(X_val)
-        labels = np.unique(y_val)
+        val_acc   = self.model.score(X_val, y_val)
+        y_pred    = self.model.predict(X_val)
+        labels    = np.unique(y_val)
 
         return {
-            "train_accuracy": float(train_acc),
-            "val_accuracy": float(val_acc),
+            "train_accuracy":   float(train_acc),
+            "val_accuracy":     float(val_acc),
             "confusion_matrix": confusion_matrix(y_val, y_pred, labels=labels).tolist(),
         }
 
@@ -149,28 +177,29 @@ class ArrhythmiaClassifier:
 
         feature_dict = dict(zip(self.FEATURE_NAMES, features.flatten()))
 
+        # No trained model → rule-based only
         if not self.is_trained:
-            rule_pred = self.classify_by_features(feature_dict)
-            return self._format_result(rule_pred, 0.5, source="rule_based")
+            pred = self.classify_by_features(feature_dict)
+            return self._format_result(pred, 0.6, source="rule_based")
 
+        # ML prediction
         features_scaled = self.scaler.transform(features)
+        probs    = self.model.predict_proba(features_scaled)[0]
+        classes  = list(self.model.classes_)
+        prob_dict = {self.ARRHYTHMIA_CODES.get(c, "OTHER"): float(p)
+                     for c, p in zip(classes, probs)}
 
-        probs = self.model.predict_proba(features_scaled)[0]
-        classes = list(self.model.classes_)
-
-        prob_dict = {self.ARRHYTHMIA_CODES[c]: float(p) for c, p in zip(classes, probs)}
-
-        best_idx = int(np.argmax(probs))
+        best_idx      = int(np.argmax(probs))
         ml_pred_class = int(classes[best_idx])
-        ml_conf = float(probs[best_idx])
+        ml_conf       = float(probs[best_idx])
 
-        if ml_conf < 0.55:
-            rule_pred = self.classify_by_features(feature_dict)
-            return self._format_result(rule_pred, ml_conf, prob_dict, source="hybrid_rule_fallback")
+        # Low confidence → trust rule-based result, keep ML probs for reference
+        if ml_conf < 0.40:
+            pred = self.classify_by_features(feature_dict)
+            return self._format_result(pred, ml_conf, prob_dict,
+                                       source="rule_based_fallback")
 
-        if ml_pred_class not in self.MITBIH_TRAINED_CLASSES:
-            ml_pred_class = 8
-
+        # Accept whatever the ML model predicted — no class whitelist
         return self._format_result(ml_pred_class, ml_conf, prob_dict, source="ml")
 
     def _format_result(
@@ -183,12 +212,12 @@ class ArrhythmiaClassifier:
         prediction = int(prediction)
         return {
             "arrhythmia_detected": prediction != 0,
-            "arrhythmia_code": self.ARRHYTHMIA_CODES.get(prediction, "OTHER"),
-            "arrhythmia_type": self.ARRHYTHMIA_TYPES.get(prediction, "Other Arrhythmia"),
-            "risk_level": self.ARRHYTHMIA_RISK.get(prediction, "Unknown"),
-            "confidence": float(confidence),
-            "source": source,
-            "all_probabilities": probabilities or {},
+            "arrhythmia_code":     self.ARRHYTHMIA_CODES.get(prediction, "OTHER"),
+            "arrhythmia_type":     self.ARRHYTHMIA_TYPES.get(prediction, "Other Arrhythmia"),
+            "risk_level":          self.ARRHYTHMIA_RISK.get(prediction, "Unknown"),
+            "confidence":          float(confidence),
+            "source":              source,
+            "all_probabilities":   probabilities or {},
         }
 
     def save_model(self, path: str):
@@ -198,9 +227,9 @@ class ArrhythmiaClassifier:
         )
 
     def load_model(self, path: str):
-        data = joblib.load(path)
-        self.model = data["model"]
-        self.scaler = data["scaler"]
+        data            = joblib.load(path)
+        self.model      = data["model"]
+        self.scaler     = data["scaler"]
         self.model_type = data["model_type"]
         self.is_trained = True
 
@@ -213,5 +242,5 @@ class ArrhythmiaClassifier:
 def create_synthetic_training_data(n_samples: int = 1000) -> Tuple[np.ndarray, np.ndarray]:
     np.random.seed(42)
     X = np.random.normal(0, 1, (n_samples, 15))
-    y = np.random.choice([0, 3, 4, 5, 8], size=n_samples)
+    y = np.random.choice([0, 1, 2, 3, 4, 5, 6, 7, 8], size=n_samples)
     return X, y
