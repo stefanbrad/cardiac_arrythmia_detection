@@ -160,18 +160,6 @@ def heart_rate_from_peaks(peaks: np.ndarray, fs: int = FS_DEFAULT) -> float:
     return float(60.0 / np.mean(rr)) if len(rr) > 0 else 0.0
 
 
-# ── Sliding-window classification ─────────────────────────────────────────────
-#
-# ROOT CAUSE OF THE ORIGINAL BUG:
-#   The old code called extract_features_from_signal() on individual beats
-#   (~0.5 s each).  A single beat contains at most 1 R-peak, so sdnn / rmssd /
-#   pnn50 were always 0.  With zeroed HRV, every beat looked "normal" to both
-#   the ML model and the rule-based classifier.
-#
-# FIX:
-#   Slide a 10-second window (step 5 s) over the signal.  Each window contains
-#   ~5-20 beats, so meaningful HRV values can be computed and arrhythmias
-#   produce distinct feature signatures.
 
 def classify_windows(signal_processed: np.ndarray, fs: int = FS_DEFAULT) -> dict:
     win_len = int(10 * fs)   # 10 s = 3600 samples at 360 Hz
